@@ -1,0 +1,53 @@
+name: Solve Cloudflare (animeblkom)
+
+# Free browser-solver: runs a real stealth browser on GitHub's runners,
+# solves the Cloudflare Managed Challenge through the SAME Webshare proxy the
+# API uses, and publishes cf_clearance + UA + exit IP to a Gist. The API host
+# stays browser-free and just replays through the same proxy.
+
+on:
+  schedule:
+    # Every 30 minutes. cf_clearance typically lasts ~30-60 min, so this keeps
+    # a fresh cookie available at all times. (GitHub cron is UTC, best-effort.)
+    - cron: "*/30 * * * *"
+  workflow_dispatch: {} # allow manual runs from the Actions tab
+
+concurrency:
+  group: solve-cf
+  cancel-in-progress: false
+
+jobs:
+  solve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Google Chrome
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+
+      - name: Install solver dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r solver-bot/requirements.txt
+
+      - name: Solve challenge and publish clearance
+        env:
+          WEBSHARE_PROXY: ${{ secrets.WEBSHARE_PROXY }}
+          GH_GIST_ID: ${{ secrets.GH_GIST_ID }}
+          GH_TOKEN: ${{ secrets.GIST_TOKEN }}
+          TARGET_URL: "https://animeblkom.net/"
+          CLEARANCE_TTL_MS: "1800000"
+        run: |
+          # xvfb gives UC mode a virtual display for the Turnstile GUI click.
+          sudo apt-get update && sudo apt-get install -y xvfb
+          xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" \
+            python solver-bot/solve.py
