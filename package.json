@@ -1,0 +1,17 @@
+{
+  "name": "animeblkom-api",
+  "version": "1.0.0",
+  "description": "API for AnimeBlkom (animeblkom.net) — Arabic anime streaming (HTML scraping + Cloudflare bypass)",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "dependencies": {
+    "cheerio": "^1.0.0",
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "node-fetch": "^2.7.0",
+    "wreq-js": "^3.2.0"
+  }
+}

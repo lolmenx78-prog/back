@@ -1,0 +1,11 @@
+{
+  "animeblkom.net": {
+    "cookies": {
+      "cf_clearance": "FAKE_TEST_TOKEN"
+    },
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+    "proxy": "http://pywwfhnz:u71lylw9nwro@142.111.67.146:5611",
+    "expires": 1789828585956,
+    "savedAt": 1789827985956
+  }
+}
