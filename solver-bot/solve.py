@@ -27,6 +27,7 @@ Optional:
 
 import json
 import os
+import socket
 import sys
 import time
 import urllib.request
@@ -40,7 +41,13 @@ CLEARANCE_TTL_MS = int(os.environ.get("CLEARANCE_TTL_MS", str(30 * 60 * 1000)))
 
 def parse_proxy(raw):
     """Accept host:port:user:pass OR user:pass@host:port -> dict."""
-    raw = raw.strip()
+    raw = (raw or "").strip()
+    if not raw:
+        raise ValueError(
+            "WEBSHARE_PROXY secret is EMPTY or missing. Add it in the repo: "
+            "Settings > Secrets and variables > Actions > New repository secret, "
+            "name=WEBSHARE_PROXY value=host:port:user:pass"
+        )
     if "@" in raw:
         creds, hostport = raw.split("@", 1)
         user, pwd = creds.split(":", 1)
@@ -48,7 +55,10 @@ def parse_proxy(raw):
     else:
         parts = raw.split(":")
         if len(parts) != 4:
-            raise ValueError("WEBSHARE_PROXY must be host:port:user:pass or user:pass@host:port")
+            raise ValueError(
+                f"WEBSHARE_PROXY malformed: got {len(parts)} colon-parts, expected 4 "
+                "(host:port:user:pass) or the user:pass@host:port form."
+            )
         host, port, user, pwd = parts
     return {
         "host": host,
@@ -58,6 +68,32 @@ def parse_proxy(raw):
         "sb": f"{user}:{pwd}@{host}:{port}",  # SeleniumBase proxy string
         "url": f"http://{user}:{pwd}@{host}:{port}",
     }
+
+
+def connect_probe(proxy, target_host="api.ipify.org", target_port=443, timeout=15):
+    """Decisive test: does this proxy support the HTTPS CONNECT tunnel a browser
+    needs? Webshare here answers plain forward-HTTP but may refuse CONNECT.
+    Returns the CONNECT status line, or an error string."""
+    try:
+        s = socket.create_connection((proxy["host"], int(proxy["port"])), timeout=timeout)
+        s.settimeout(timeout)
+        import base64
+        auth = base64.b64encode(f"{proxy['user']}:{proxy['pwd']}".encode()).decode()
+        req = (
+            f"CONNECT {target_host}:{target_port} HTTP/1.1\r\n"
+            f"Host: {target_host}:{target_port}\r\n"
+            f"Proxy-Authorization: Basic {auth}\r\n\r\n"
+        )
+        s.sendall(req.encode())
+        data = s.recv(1024)
+        s.close()
+        if not data:
+            return "NO_REPLY (closed with no data)"
+        return data.split(b"\r\n")[0].decode(errors="replace")
+    except socket.timeout:
+        return "TIMEOUT (no CONNECT reply -> proxy likely forward-only, no tunnel)"
+    except Exception as e:
+        return f"ERROR: {e}"
 
 
 def exit_ip_via_proxy(proxy):
@@ -100,12 +136,25 @@ def looks_solved(sb):
     return (not bad) and len(src) > 1500
 
 
+def _present(name):
+    v = os.environ.get(name, "")
+    return f"{name}={'SET(' + str(len(v)) + ' chars)' if v else 'MISSING/EMPTY'}"
+
+
 def main():
-    proxy = parse_proxy(os.environ["WEBSHARE_PROXY"])
+    # Masked presence check — never prints secret values.
+    print("[env] " + " | ".join(_present(k) for k in ("WEBSHARE_PROXY", "GH_GIST_ID", "GH_TOKEN")))
+    proxy = parse_proxy(os.environ.get("WEBSHARE_PROXY", ""))
     print(f"[info] target={TARGET_URL} proxy={proxy['host']}:{proxy['port']}")
 
     expected_ip = exit_ip_via_proxy(proxy)
-    print(f"[info] proxy exit IP (expected): {expected_ip}")
+    print(f"[info] proxy forward-HTTP exit IP: {expected_ip}")
+
+    # DECISIVE probe: a browser needs the CONNECT tunnel for HTTPS. If this
+    # proxy only does forward-HTTP, Chrome cannot load the site through it.
+    probe = connect_probe(proxy)
+    print(f"[probe] CONNECT https tunnel -> {probe}")
+    connect_ok = probe.strip().startswith("HTTP/") and "200" in probe
 
     # UC mode = undetected Chrome. Headed under xvfb in CI for best pass rate.
     with SB(uc=True, headed=True, proxy=proxy["sb"], locale_code="ar") as sb:
@@ -128,10 +177,30 @@ def main():
             except Exception:
                 pass
 
+        # Diagnostics — tell us WHY if it failed (proxy vs challenge).
+        try:
+            cur_url = sb.get_current_url()
+            title = sb.get_title()
+            src = sb.get_page_source()
+            print(f"[diag] current_url={cur_url}")
+            print(f"[diag] title={title!r}")
+            print(f"[diag] page_source_len={len(src)}")
+            print(f"[diag] source_head={src[:400]!r}")
+        except Exception as e:
+            print(f"[diag] could not read page state: {e}")
+
         ua = sb.execute_script("return navigator.userAgent;")
         cookies = {c["name"]: c["value"] for c in sb.driver.get_cookies()}
         cf = cookies.get("cf_clearance")
         print(f"[info] solved={solved} cf_clearance={'yes' if cf else 'no'} cookies={list(cookies)}")
+
+        if not cf and not connect_ok:
+            print(
+                "[error] No cf_clearance AND the proxy does NOT support the CONNECT "
+                "tunnel. A browser cannot load HTTPS through a forward-only proxy, so "
+                "it cannot bind cf_clearance to this Webshare IP. Use a proxy that "
+                "supports CONNECT (browser tunneling), or switch strategy."
+            )
 
         if not cf:
             print("[error] no cf_clearance obtained; not publishing.")
